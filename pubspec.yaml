@@ -31,7 +31,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  mongo_dart: ^0.10.3 # Conexão direta com MongoDB
+  supabase_flutter: ^2.5.0 # Conexão direta com Supabase
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

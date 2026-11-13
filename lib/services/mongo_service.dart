@@ -1,75 +1,140 @@
-import 'package:mongo_dart/mongo_dart.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/appointment.dart';
-import '../models/user.dart';
+import '../models/user.dart' as model;
 
 class MongoService {
-  // String de conexão com o MongoDB Atlas ou Local
-  static const String MONGO_URL = "mongodb+srv://julyaromeiro17_db_user:cZTbYxiLy1DRABmK@cluster0.mb2db9a.mongodb.net/";
+  // Transformei em static para poder ser usado nos métodos estáticos abaixo
+  static final _supabase = Supabase.instance.client;
   
   // Nome das coleções (tabelas no NoSQL)
   static const String USER_COLLECTION = "users";
   static const String APPOINTMENT_COLLECTION = "appointments";
 
-  static late Db db; // Instância estática do banco de dados
-
-  // Inicializa a conexão com o MongoDB
-  static Future<void> connect() async {
-    db = await Db.create(MONGO_URL);
-    await db.open(); // Abre o socket de conexão
-  }
-
   // --- AUTENTICAÇÃO ---
 
   // Cadastra um novo usuário caso o e-mail não exista
-  static Future<bool> registerUser(User user) async {
-    final collection = db.collection(USER_COLLECTION);
-    // Verifica se já existe um usuário com esse e-mail no banco
-    final existingUser = await collection.findOne(where.eq('email', user.email));
-    
-    if (existingUser != null) {
-      return false; // Retorna falso se o e-mail já estiver cadastrado
-    }
+  static Future<bool> registerUser(model.User user) async {
+    try {
+      final response = await _supabase.auth.signUp(
+        email: user.email,
+        password: user.password,
+      );
+      
+      // Salva os dados complementares do usuário
+      if (response.user != null) {
+        await _supabase.from(USER_COLLECTION).insert({
+          'id': response.user!.id,
+          'name': user.name,
+          'email': user.email.trim(),
+        });
+        return true;
+      }
+      return false;
+    } on AuthException catch (e) {
+      print('ERRO DE AUTENTICAÇÃO: ${e.message}');
+      return false;
 
-    await collection.insertOne(user.toMap()); // Insere a foto do documento
-    return true;
+    } catch (e) {
+      print('ERRO INESPERADO: $e');
+      return false;
+    }
   }
 
-  // Realiza o login comparando e-mail e senha
-  static Future<User?> loginUser(String email, String password) async {
-    final collection = db.collection(USER_COLLECTION);
-    // Busca um registro que combine e-mail E senha
-    final userData = await collection.findOne(
-      where.eq('email', email).eq('password', password),
-    );
-    
-    if (userData == null) return null; // Retorna null se não achar nada
-    return User.fromMap(userData); // Retorna a instância do usuário logado
+  // Realiza login utilizando o Supabase Auth
+  static Future<model.User?> loginUser(String email, String password) async {
+    try{
+      final response = await _supabase.auth.signInWithPassword(
+        email: email.trim(),
+        password: password,
+      );
+      
+      final authUser = response.user;
+
+      if (authUser == null) return null;
+
+      // Busca os dados complementares do usuário
+      final userData = await _supabase
+          .from(USER_COLLECTION)
+          .select()
+          .eq('id', authUser.id)
+          .maybeSingle();
+
+      if (userData == null) return null;
+
+      return model.User.fromMap(userData);
+
+    } on AuthException catch (e) {
+      print('ERRO DE LOGIN: ${e.message}');
+      return null;
+
+    } catch (e) {
+      print('ERRO INESPERADO: $e');
+      return null;
+    }
   }
 
   // --- CRUD DE COMPROMISSOS ---
 
-  // READ (Ler): Busca apenas os compromissos pertencentes ao usuário logado
+  // READ: Busca os compromissos do usuário logado
   static Future<List<Appointment>> getAppointments(String userId) async {
-    final collection = db.collection(APPOINTMENT_COLLECTION);
-    final list = await collection.find(where.eq('userId', userId)).toList();
-    return list.map((map) => Appointment.fromMap(map)).toList();
+    try {
+      final list = await _supabase
+          .from(APPOINTMENT_COLLECTION)
+          .select()
+          .eq('userId', userId);
+
+      return list
+          .map((map) => Appointment.fromMap(map))
+          .toList();
+
+    } catch (e) {
+      print('ERRO AO BUSCAR COMPROMISSOS: $e');
+      return [];
+    }
   }
 
-  // CREATE (Criar): Salva um novo compromisso no banco
+  // CREATE: Cria um novo compromisso
   static Future<void> createAppointment(Appointment appointment) async {
-    final collection = db.collection(APPOINTMENT_COLLECTION);
-    await collection.insertOne(appointment.toMap());
+    final userId = _supabase.auth.currentUser?.id;
+
+    if (userId == null) {
+      throw Exception('Usuário não autenticado.');
+    }
+
+    final data = appointment.toMap();
+
+    // Associa o compromisso ao usuário logado
+    data['userId'] = userId;
+
+    await _supabase
+        .from(APPOINTMENT_COLLECTION)
+        .insert(data);
   }
 
-  // UPDATE (Atualizar): Atualiza os dados de um compromisso por seu ID
+  // UPDATE: Atualiza um compromisso
   static Future<void> updateAppointment(Appointment appointment) async {
-    final collection = db.collection(APPOINTMENT_COLLECTION);
-    await collection.replaceOne(where.id(appointment.id!), appointment.toMap());
+    final id = appointment.id;
+
+    if (id == null) {
+      throw Exception('ID do compromisso não informado.');
+    }
+
+    await _supabase
+        .from(APPOINTMENT_COLLECTION)
+        .update(appointment.toMap())
+        .eq('id', id);
   }
 
-  // DELETE (Deletar): Remove um compromisso do banco pelo ID
-  static Future<void> deleteAppointment(ObjectId id) async {
-    final collection = db.collection(APPOINTMENT_COLLECTION);
-    await collection.remove(where.id(id));
+  // DELETE: Exclui um compromisso
+  static Future<void> deleteAppointment(String id) async {
+    await _supabase
+        .from(APPOINTMENT_COLLECTION)
+        .delete()
+        .eq('id', id);
+  }
+
+  // LOGOUT: Encerra a sessão
+  static Future<void> logout() async {
+    await _supabase.auth.signOut();
   }
 }
